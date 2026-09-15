@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-import math
 import datetime
 import urllib.parse
 import feedparser
@@ -11,13 +10,13 @@ from PIL import Image, ImageFilter
 from google import genai
 from gtts import gTTS
 from moviepy.editor import (
-    ImageClip,
     AudioFileClip,
     TextClip,
     CompositeVideoClip,
     CompositeAudioClip,
     concatenate_videoclips
 )
+from moviepy.video.VideoClip import VideoClip
 from moviepy.audio.AudioClip import AudioClip
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -171,14 +170,13 @@ for idx in range(2, 4):
     except Exception:
         pass
 
-# --- 7. SLIDESHOW (PILLOW-POWERED SMOOTH ZOOM) ---
+# --- 7. SLIDESHOW (PILLOW SMOOTH ZOOM) ---
 slide_dur = total_duration / len(image_files)
 video_slides = []
 
 for s_path in image_files:
     pil_img = Image.open(s_path).convert("RGB")
     
-    # Custom frame function avoiding MoviePy resize bugs
     def make_zoom_frame(t, base_im=pil_img, dur=slide_dur):
         zoom = 1.0 + 0.04 * (t / dur)
         w, h = base_im.size
@@ -189,7 +187,6 @@ for s_path in image_files:
         cropped = resized.crop((left, top, left + 1080, top + 1920))
         return np.array(cropped)
 
-    from moviepy.video.VideoClip import VideoClip
     clip = VideoClip(make_zoom_frame, duration=slide_dur)
     video_slides.append(clip)
 
@@ -214,14 +211,17 @@ headline = TextClip(
     bg_color='rgba(0,0,0,0.75)'
 ).set_position(('center', 280)).set_duration(total_duration)
 
-# --- 8. DRAMATIC NEWS SFX AUDIO ---
+# --- 8. DRAMATIC NEWS SFX AUDIO (VECTORIZED NUMPY) ---
 def news_sound_effect(t):
-    pulse = 0.07 * math.sin(2 * math.pi * 90 * t)
-    tick = 0.05 * math.sin(2 * math.pi * 1200 * t) * (math.exp(-60 * (t % 0.5)))
-    return pulse + tick
+    # Vectorized calculation for MoviePy arrays
+    pulse = 0.05 * np.sin(2 * np.pi * 90 * t)
+    tick = 0.04 * np.sin(2 * np.pi * 1200 * t) * np.exp(-50 * (t % 0.5))
+    mono = pulse + tick
+    # Return stereo sound: (samples, 2)
+    return np.column_stack((mono, mono))
 
-sfx_audio = AudioClip(news_sound_effect, duration=total_duration).volumex(0.35)
-final_audio = CompositeAudioClip([voice_audio.volumex(1.0), sfx_audio])
+sfx_audio = AudioClip(news_sound_effect, duration=total_duration)
+final_audio = CompositeAudioClip([voice_audio, sfx_audio])
 
 # Render Output Video
 video = CompositeVideoClip([slideshow, badge, headline], size=(1080, 1920))
