@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import feedparser
 import requests
 from google import genai
@@ -71,7 +72,7 @@ img_response = requests.get(image_url, timeout=15)
 with open("news_image.jpg", "wb") as f:
     f.write(img_response.content)
 
-# --- 5. GENERATE SCRIPT VIA GEMINI ---
+# --- 5. GENERATE SCRIPT VIA GEMINI (WITH RETRY & FALLBACK) ---
 client = genai.Client(api_key=GEMINI_API_KEY)
 prompt = f"""
 Rewrite the following news story into an engaging, 20-30 second YouTube Shorts script.
@@ -84,11 +85,30 @@ Output format:
 Return ONLY the voiceover narrative text. No brackets, no stage directions, no intro greetings.
 """
 
-response = client.models.generate_content(
-    model="gemini-3.6-flash",
-    contents=prompt
-)
-script_text = response.text.strip()
+candidate_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
+script_text = None
+
+for model_name in candidate_models:
+    for attempt in range(3):
+        try:
+            print(f"Calling {model_name} (Attempt {attempt + 1})...")
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
+            if response.text:
+                script_text = response.text.strip()
+                break
+        except Exception as err:
+            print(f"Attempt {attempt + 1} with {model_name} failed: {err}")
+            time.sleep(5)
+    if script_text:
+        break
+
+if not script_text:
+    print("AI generation failed across models. Using headline and summary fallback.")
+    script_text = f"{title}. {summary}"
+
 print(f"Generated Script: {script_text}")
 
 # --- 6. TEXT TO SPEECH ---
