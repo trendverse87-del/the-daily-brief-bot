@@ -3,6 +3,7 @@ import sys
 import time
 import feedparser
 import requests
+from PIL import Image, ImageOps
 from google import genai
 from gtts import gTTS
 from moviepy.editor import (
@@ -18,8 +19,6 @@ from google.oauth2.credentials import Credentials
 # --- 1. CONFIGURATION ---
 RSS_FEED_URL = "http://feeds.bbci.co.uk/news/world/rss.xml"
 HISTORY_FILE = "last_news.txt"
-
-# API Key fallback with provided key
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6KeN6UXhMEwUVaPinOKpjtLNUDgEf0qNFBRBm992InRqA"
 
 if not GEMINI_API_KEY:
@@ -44,7 +43,6 @@ for entry in feed.entries[:10]:
     if entry_id in seen_links:
         continue
 
-    # Find image in entry media/enclosures
     found_img = None
     if "media_thumbnail" in entry and len(entry.media_thumbnail) > 0:
         found_img = entry.media_thumbnail[0]["url"]
@@ -69,12 +67,18 @@ target_id = selected_entry.get("id") or selected_entry.get("link")
 
 print(f"Target News Found: {title}")
 
-# --- 4. DOWNLOAD IMAGE ---
+# --- 4. DOWNLOAD & PREPARE 9:16 IMAGE (Pillow fix) ---
 img_response = requests.get(image_url, timeout=15)
-with open("news_image.jpg", "wb") as f:
+with open("raw_image.jpg", "wb") as f:
     f.write(img_response.content)
 
-# --- 5. GENERATE SCRIPT VIA GEMINI (WITH RETRY & FALLBACK) ---
+# Resize to 9:16 (1080x1920) without MoviePy resize bugs
+with Image.open("raw_image.jpg") as im:
+    im = im.convert("RGB")
+    fitted_im = ImageOps.fit(im, (1080, 1920), method=Image.Resampling.LANCZOS)
+    fitted_im.save("news_image.jpg")
+
+# --- 5. GENERATE SCRIPT VIA GEMINI ---
 client = genai.Client(api_key=GEMINI_API_KEY)
 prompt = f"""
 Rewrite the following news story into an engaging, 20-30 second YouTube Shorts script.
@@ -87,7 +91,7 @@ Output format:
 Return ONLY the voiceover narrative text. No brackets, no stage directions, no intro greetings.
 """
 
-candidate_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
+candidate_models = ["gemini-3.6-flash", "gemini-3.1-pro-preview"]
 script_text = None
 
 for model_name in candidate_models:
@@ -103,12 +107,12 @@ for model_name in candidate_models:
                 break
         except Exception as err:
             print(f"Attempt {attempt + 1} with {model_name} failed: {err}")
-            time.sleep(5)
+            time.sleep(4)
     if script_text:
         break
 
 if not script_text:
-    print("AI generation failed across models. Using headline and summary fallback.")
+    print("Using headline and summary fallback.")
     script_text = f"{title}. {summary}"
 
 print(f"Generated Script: {script_text}")
@@ -117,19 +121,13 @@ print(f"Generated Script: {script_text}")
 tts = gTTS(text=script_text, lang='en', tld='com')
 tts.save("voiceover.mp3")
 
-# --- 7. VIDEO RENDERING (9:16 Shorts) ---
+# --- 7. VIDEO RENDERING ---
 audio = AudioFileClip("voiceover.mp3")
 duration = audio.duration + 0.5
 
-# Image background resized for 1080x1920 with padding
-image_clip = (
-    ImageClip("news_image.jpg")
-    .resize(width=1080)
-    .set_position("center")
-    .set_duration(duration)
-)
+# Directly load the pre-fitted 1080x1920 image
+image_clip = ImageClip("news_image.jpg").set_duration(duration)
 
-# Text banner for headline
 headline = TextClip(
     title,
     fontsize=48,
