@@ -1,10 +1,10 @@
 import os
-import re
-import json
+import sys
+import textwrap
 import asyncio
-import requests
 import feedparser
 import edge_tts
+import urllib.request
 from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -12,9 +12,19 @@ from googleapiclient.http import MediaFileUpload
 from PIL import Image, ImageDraw, ImageFont
 from moviepy.editor import ImageClip, AudioFileClip
 
-def get_latest_news():
+def check_and_get_news():
     feed = feedparser.parse("https://feeds.bbci.co.uk/news/world/rss.xml")
+    if not feed.entries:
+        print("News feed is empty.")
+        sys.exit(0)
+        
     entry = feed.entries[0]
+    news_id = getattr(entry, "id", entry.link)
+    
+    # Save the new ID
+    with open("last_news.txt", "w") as f:
+        f.write(news_id)
+        
     return entry.title, entry.summary
 
 def generate_script(title, summary):
@@ -38,10 +48,37 @@ async def create_voiceover(text, audio_path="voice.mp3"):
 def create_image(title, news_text, image_path="frame.png"):
     img = Image.new("RGB", (1080, 1920), color=(15, 23, 42))
     draw = ImageDraw.Draw(img)
-    draw.rectangle([(0, 0), (1080, 200)], fill=(220, 38, 38))
-    draw.text((60, 75), "THE DAILY BRIEF", fill=(255, 255, 255))
-    draw.text((80, 350), f"BREAKING NEWS:\n{title}", fill=(248, 250, 252))
-    draw.text((80, 700), f"{news_text[:280]}...", fill=(203, 213, 225))
+    
+    # Download a clean bold font if missing
+    font_path = "Roboto-Bold.ttf"
+    if not os.path.exists(font_path):
+        url = "https://github.com/google/fonts/raw/main/apache/roboto/Roboto%5Bwdth%2Cwght%5D.ttf"
+        urllib.request.urlretrieve(url, font_path)
+
+    font_header = ImageFont.truetype(font_path, 60)
+    font_badge = ImageFont.truetype(font_path, 40)
+    font_title = ImageFont.truetype(font_path, 56)
+    font_body = ImageFont.truetype(font_path, 42)
+
+    # Top Banner
+    draw.rectangle([(0, 0), (1080, 220)], fill=(220, 38, 38))
+    draw.text((60, 75), "THE DAILY BRIEF", fill=(255, 255, 255), font=font_header)
+    
+    # Breaking News Badge
+    draw.rounded_rectangle([(70, 300), (450, 370)], radius=12, fill=(239, 68, 68))
+    draw.text((95, 312), "BREAKING NEWS", fill=(255, 255, 255), font=font_badge)
+    
+    # News Headline Box
+    draw.rounded_rectangle([(70, 410), (1010, 850)], radius=24, fill=(30, 41, 59))
+    wrapped_title = textwrap.fill(title, width=30)
+    draw.text((110, 460), wrapped_title, fill=(255, 255, 255), font=font_title, spacing=16)
+    
+    # Script / Summary Box
+    draw.rounded_rectangle([(70, 900), (1010, 1500)], radius=24, fill=(30, 41, 59))
+    clean_summary = news_text.replace('\n', ' ')
+    wrapped_body = textwrap.fill(clean_summary[:220] + "...", width=34)
+    draw.text((110, 950), wrapped_body, fill=(226, 232, 240), font=font_body, spacing=18)
+    
     img.save(image_path)
 
 def build_video():
@@ -71,8 +108,8 @@ def upload_to_youtube(title, description):
     print(f"Uploaded Successfully! Video ID: {response.get('id')}")
 
 def main():
-    print("Fetching news...")
-    title, summary = get_latest_news()
+    print("Checking for new stories...")
+    title, summary = check_and_get_news()
     
     print("Generating AI script...")
     script = generate_script(title, summary)
