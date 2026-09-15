@@ -4,7 +4,6 @@ import textwrap
 import asyncio
 import feedparser
 import edge_tts
-import urllib.request
 from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -21,7 +20,6 @@ def check_and_get_news():
     entry = feed.entries[0]
     news_id = getattr(entry, "id", entry.link)
     
-    # Save the new ID
     with open("last_news.txt", "w") as f:
         f.write(news_id)
         
@@ -49,32 +47,37 @@ def create_image(title, news_text, image_path="frame.png"):
     img = Image.new("RGB", (1080, 1920), color=(15, 23, 42))
     draw = ImageDraw.Draw(img)
     
-    # Download a clean bold font if missing
-    font_path = "Roboto-Bold.ttf"
-    if not os.path.exists(font_path):
-        url = "https://github.com/google/fonts/raw/main/apache/roboto/Roboto%5Bwdth%2Cwght%5D.ttf"
-        urllib.request.urlretrieve(url, font_path)
+    # Load Ubuntu system fonts safely
+    font_bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    font_normal_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
-    font_header = ImageFont.truetype(font_path, 60)
-    font_badge = ImageFont.truetype(font_path, 40)
-    font_title = ImageFont.truetype(font_path, 56)
-    font_body = ImageFont.truetype(font_path, 42)
+    if os.path.exists(font_bold_path):
+        font_header = ImageFont.truetype(font_bold_path, 60)
+        font_badge = ImageFont.truetype(font_bold_path, 38)
+        font_title = ImageFont.truetype(font_bold_path, 54)
+    else:
+        font_header = font_badge = font_title = ImageFont.load_default()
 
-    # Top Banner
+    if os.path.exists(font_normal_path):
+        font_body = ImageFont.truetype(font_normal_path, 42)
+    else:
+        font_body = ImageFont.load_default()
+
+    # Red Top Banner
     draw.rectangle([(0, 0), (1080, 220)], fill=(220, 38, 38))
-    draw.text((60, 75), "THE DAILY BRIEF", fill=(255, 255, 255), font=font_header)
+    draw.text((60, 80), "THE DAILY BRIEF", fill=(255, 255, 255), font=font_header)
     
     # Breaking News Badge
     draw.rounded_rectangle([(70, 300), (450, 370)], radius=12, fill=(239, 68, 68))
-    draw.text((95, 312), "BREAKING NEWS", fill=(255, 255, 255), font=font_badge)
+    draw.text((95, 314), "BREAKING NEWS", fill=(255, 255, 255), font=font_badge)
     
-    # News Headline Box
+    # Headline Card
     draw.rounded_rectangle([(70, 410), (1010, 850)], radius=24, fill=(30, 41, 59))
     wrapped_title = textwrap.fill(title, width=30)
     draw.text((110, 460), wrapped_title, fill=(255, 255, 255), font=font_title, spacing=16)
     
-    # Script / Summary Box
-    draw.rounded_rectangle([(70, 900), (1010, 1500)], radius=24, fill=(30, 41, 59))
+    # Summary Card
+    draw.rounded_rectangle([(70, 900), (1010, 1520)], radius=24, fill=(30, 41, 59))
     clean_summary = news_text.replace('\n', ' ')
     wrapped_body = textwrap.fill(clean_summary[:220] + "...", width=34)
     draw.text((110, 950), wrapped_body, fill=(226, 232, 240), font=font_body, spacing=18)
