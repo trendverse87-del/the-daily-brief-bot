@@ -1,14 +1,16 @@
 import os
 import sys
+import io
 import textwrap
 import asyncio
+import requests
 import feedparser
 import edge_tts
 from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from moviepy.editor import ImageClip, AudioFileClip
 
 def check_and_get_news():
@@ -23,7 +25,17 @@ def check_and_get_news():
     with open("last_news.txt", "w") as f:
         f.write(news_id)
         
-    return entry.title, entry.summary
+    # Extract news image URL from media_thumbnail or enclosures
+    image_url = None
+    if "media_thumbnail" in entry and len(entry.media_thumbnail) > 0:
+        image_url = entry.media_thumbnail[0]["url"]
+    elif "links" in entry:
+        for link in entry.links:
+            if link.get("type", "").startswith("image/"):
+                image_url = link.get("href")
+                break
+                
+    return entry.title, entry.summary, image_url
 
 def generate_script(title, summary):
     client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
@@ -43,46 +55,59 @@ async def create_voiceover(text, audio_path="voice.mp3"):
     communicate = edge_tts.Communicate(text, voice="en-US-ChristopherNeural")
     await communicate.save(audio_path)
 
-def create_image(title, news_text, image_path="frame.png"):
+def create_image(title, news_text, image_url=None, output_path="frame.png"):
     img = Image.new("RGB", (1080, 1920), color=(15, 23, 42))
     draw = ImageDraw.Draw(img)
     
-    # Load Ubuntu system fonts safely
     font_bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     font_normal_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
-    if os.path.exists(font_bold_path):
-        font_header = ImageFont.truetype(font_bold_path, 60)
-        font_badge = ImageFont.truetype(font_bold_path, 38)
-        font_title = ImageFont.truetype(font_bold_path, 54)
-    else:
-        font_header = font_badge = font_title = ImageFont.load_default()
-
-    if os.path.exists(font_normal_path):
-        font_body = ImageFont.truetype(font_normal_path, 42)
-    else:
-        font_body = ImageFont.load_default()
+    font_header = ImageFont.truetype(font_bold_path, 60) if os.path.exists(font_bold_path) else ImageFont.load_default()
+    font_badge = ImageFont.truetype(font_bold_path, 34) if os.path.exists(font_bold_path) else ImageFont.load_default()
+    font_title = ImageFont.truetype(font_bold_path, 46) if os.path.exists(font_bold_path) else ImageFont.load_default()
+    font_body = ImageFont.truetype(font_normal_path, 38) if os.path.exists(font_normal_path) else ImageFont.load_default()
 
     # Red Top Banner
     draw.rectangle([(0, 0), (1080, 220)], fill=(220, 38, 38))
-    draw.text((60, 80), "THE DAILY BRIEF", fill=(255, 255, 255), font=font_header)
+    draw.text((60, 75), "THE DAILY BRIEF", fill=(255, 255, 255), font=font_header)
     
-    # Breaking News Badge
-    draw.rounded_rectangle([(70, 300), (450, 370)], radius=12, fill=(239, 68, 68))
-    draw.text((95, 314), "BREAKING NEWS", fill=(255, 255, 255), font=font_badge)
+    # Breaking News Tag
+    draw.rounded_rectangle([(60, 280), (420, 345)], radius=12, fill=(239, 68, 68))
+    draw.text((80, 295), "BREAKING NEWS", fill=(255, 255, 255), font=font_badge)
     
-    # Headline Card
-    draw.rounded_rectangle([(70, 410), (1010, 850)], radius=24, fill=(30, 41, 59))
-    wrapped_title = textwrap.fill(title, width=30)
-    draw.text((110, 460), wrapped_title, fill=(255, 255, 255), font=font_title, spacing=16)
+    # 1. Headline Card
+    draw.rounded_rectangle([(60, 370), (1020, 690)], radius=20, fill=(30, 41, 59))
+    wrapped_title = textwrap.fill(title, width=32)
+    draw.text((90, 405), wrapped_title, fill=(255, 255, 255), font=font_title, spacing=14)
     
-    # Summary Card
-    draw.rounded_rectangle([(70, 900), (1010, 1520)], radius=24, fill=(30, 41, 59))
+    # 2. News Image Placement
+    img_box = (60, 720, 1020, 1260)
+    img_w = img_box[2] - img_box[0]
+    img_h = img_box[3] - img_box[1]
+    
+    loaded_thumb = None
+    if image_url:
+        try:
+            res = requests.get(image_url, timeout=10)
+            if res.status_code == 200:
+                raw_img = Image.open(io.BytesIO(res.content)).convert("RGB")
+                loaded_thumb = ImageOps.fit(raw_img, (img_w, img_h), method=Image.Resampling.LANCZOS)
+        except Exception as e:
+            print(f"Failed to fetch image: {e}")
+
+    if loaded_thumb:
+        img.paste(loaded_thumb, (img_box[0], img_box[1]))
+    else:
+        draw.rounded_rectangle(img_box, radius=20, fill=(51, 65, 85))
+        draw.text((380, 960), "[ WORLD NEWS ]", fill=(148, 163, 184), font=font_title)
+
+    # 3. Script Summary Card
+    draw.rounded_rectangle([(60, 1290), (1020, 1720)], radius=20, fill=(30, 41, 59))
     clean_summary = news_text.replace('\n', ' ')
-    wrapped_body = textwrap.fill(clean_summary[:220] + "...", width=34)
-    draw.text((110, 950), wrapped_body, fill=(226, 232, 240), font=font_body, spacing=18)
+    wrapped_body = textwrap.fill(clean_summary[:210] + "...", width=34)
+    draw.text((90, 1330), wrapped_body, fill=(226, 232, 240), font=font_body, spacing=14)
     
-    img.save(image_path)
+    img.save(output_path)
 
 def build_video():
     audio = AudioFileClip("voice.mp3")
@@ -112,16 +137,17 @@ def upload_to_youtube(title, description):
 
 def main():
     print("Checking for new stories...")
-    title, summary = check_and_get_news()
+    title, summary, image_url = check_and_get_news()
     
+    print(f"News image URL: {image_url}")
     print("Generating AI script...")
     script = generate_script(title, summary)
     
     print("Generating TTS voiceover...")
     asyncio.run(create_voiceover(script))
     
-    print("Generating visual frame...")
-    create_image(title, script)
+    print("Generating visual frame with image...")
+    create_image(title, script, image_url)
     
     print("Rendering video...")
     build_video()
