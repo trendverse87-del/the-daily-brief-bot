@@ -9,6 +9,9 @@ jobs:
   build-and-upload:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -18,10 +21,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install System FFmpeg
+      - name: Install System Dependencies & Fonts
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg imagemagick fonts-dejavu-core
+          # ImageMagick policy fix for MoviePy TextClip
+          sudo sed -i 's/rights="none" pattern="@\*"/rights="read | write" pattern="@\*"/' /etc/ImageMagick-6/policy.xml || true
 
       - name: Install Python Dependencies
         run: |
@@ -39,3 +44,10 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python main.py
+
+      - name: Commit Updated History
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_news.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto update last_news.txt [skip ci]" && git push)
