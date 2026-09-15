@@ -2,6 +2,7 @@ feedparser
 requests
 google-genai
 gtts
+Pillow
 moviepy<2.0.0
 google-api-python-client
 google-auth-oauthlib
