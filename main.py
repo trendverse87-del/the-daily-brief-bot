@@ -18,7 +18,9 @@ from google.oauth2.credentials import Credentials
 # --- 1. CONFIGURATION ---
 RSS_FEED_URL = "http://feeds.bbci.co.uk/news/world/rss.xml"
 HISTORY_FILE = "last_news.txt"
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# API Key fallback with provided key
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6KeN6UXhMEwUVaPinOKpjtLNUDgEf0qNFBRBm992InRqA"
 
 if not GEMINI_API_KEY:
     print("Error: GEMINI_API_KEY is not set.")
