@@ -6,6 +6,7 @@ import datetime
 import urllib.parse
 import feedparser
 import requests
+import numpy as np
 from PIL import Image, ImageFilter
 from google import genai
 from gtts import gTTS
@@ -22,24 +23,17 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
 
-# --- 1. CONFIGURATION (MULTI-CATEGORY BBC FEEDS) ---
+# --- 1. CONFIGURATION ---
 RSS_FEEDS = [
-    "https://feeds.bbci.co.uk/news/rss.xml",                   # Top Stories / Breaking
-    "https://feeds.bbci.co.uk/news/world/rss.xml",             # World News
-    "https://feeds.bbci.co.uk/news/technology/rss.xml",        # Technology & AI
-    "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml", # Science
-    "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",  # Culture & Entertainment
-    "https://feeds.bbci.co.uk/news/business/rss.xml",          # Business & Markets
-    "https://feeds.bbci.co.uk/sport/rss.xml"                   # Sports Highlights
+    "https://feeds.bbci.co.uk/news/rss.xml",
+    "https://feeds.bbci.co.uk/news/world/rss.xml",
+    "https://feeds.bbci.co.uk/news/technology/rss.xml",
+    "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml"
 ]
 
 HISTORY_FILE = "last_news.txt"
 DAILY_LIMIT = 8
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6KeN6UXhMEwUVaPinOKpjtLNUDgEf0qNFBRBm992InRqA"
-
-if not GEMINI_API_KEY:
-    print("Error: GEMINI_API_KEY is not set.")
-    sys.exit(1)
 
 # --- 2. CHECK HISTORY & DAILY LIMIT ---
 seen_links = set()
@@ -61,8 +55,8 @@ if today_uploads >= DAILY_LIMIT:
     print(f"Daily limit reached ({today_uploads}/{DAILY_LIMIT}). Exiting.")
     sys.exit(0)
 
-# --- 3. FETCH ALL FEEDS & PICK THE MOST RECENT VIRAL STORY ---
-print("Fetching all BBC News Categories...")
+# --- 3. FETCH RSS FEEDS & GET LATEST VIRAL STORY ---
+print("Fetching BBC News Categories...")
 all_entries = []
 
 for feed_url in RSS_FEEDS:
@@ -72,7 +66,6 @@ for feed_url in RSS_FEEDS:
     except Exception as e:
         print(f"Error fetching {feed_url}: {e}")
 
-# Publish date/time එක අනුව අලුත්ම ඒවා උඩට sort කිරීම
 all_entries.sort(
     key=lambda x: x.get("published_parsed") or x.get("updated_parsed") or time.gmtime(0),
     reverse=True
@@ -86,7 +79,6 @@ for entry in all_entries:
     if entry_id in seen_links:
         continue
 
-    # Thumbnail හෝ High-Res image සෙවීම
     found_img = None
     if "media_thumbnail" in entry and len(entry.media_thumbnail) > 0:
         found_img = entry.media_thumbnail[0]["url"]
@@ -102,7 +94,7 @@ for entry in all_entries:
         break
 
 if not selected_entry:
-    print("No fresh news found across all feeds. Exiting.")
+    print("No fresh news found. Exiting.")
     sys.exit(0)
 
 title = selected_entry.title
@@ -110,32 +102,21 @@ summary = selected_entry.get("summary", "")
 target_id = selected_entry.get("id") or selected_entry.get("link")
 print(f"Selected Viral Story: {title}")
 
-# --- 4. VIRAL SCRIPT VIA GEMINI ---
-client = genai.Client(api_key=GEMINI_API_KEY)
-prompt = f"""
-Turn this breaking story into an extremely engaging, viral 20-second YouTube Shorts script.
-Rules:
-1. Hook the audience in the first sentence.
-2. Keep it energetic, fast-paced, and concise.
-3. Spoken text ONLY. No titles, no hashtags, no asterisks, no sound effect notes.
-
+# --- 4. GENERATE SCRIPT VIA GEMINI WITH FALLBACK ---
+script_text = None
+try:
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    prompt = f"""
+Write a suspenseful 20-second YouTube Shorts script about this news story.
 Headline: {title}
 Context: {summary}
+Output spoken text only.
 """
-
-candidate_models = ["gemini-3.6-flash", "gemini-3.1-pro-preview"]
-script_text = None
-
-for model_name in candidate_models:
-    try:
-        print(f"Generating script using {model_name}...")
-        res = client.models.generate_content(model=model_name, contents=prompt)
-        if res.text:
-            script_text = res.text.strip().replace("*", "")
-            break
-    except Exception as e:
-        print(f"Model {model_name} error: {e}")
-        time.sleep(2)
+    res = client.models.generate_content(model="gemini-3.6-flash", contents=prompt)
+    if res.text:
+        script_text = res.text.strip().replace("*", "")
+except Exception as e:
+    print(f"AI generation bypassed: {e}")
 
 if not script_text:
     script_text = f"Breaking news update. {title}. {summary}"
@@ -148,19 +129,19 @@ tts.save("voice.mp3")
 voice_audio = AudioFileClip("voice.mp3")
 total_duration = voice_audio.duration + 0.8
 
-# --- 6. MULTI-IMAGE ACQUISITION & FORMATTING (1080x1920) ---
+# --- 6. MULTI-IMAGE ACQUISITION & SAFE 9:16 RENDERING ---
 def build_portrait_slide(img_path, output_name):
     with Image.open(img_path) as im:
         im = im.convert("RGB")
-        # Blurred background
+        # 1. Blurred background
         bg_scale = max(1080 / im.width, 1920 / im.height)
         bg_sz = (int(im.width * bg_scale), int(im.height * bg_scale))
         bg = im.resize(bg_sz, Image.Resampling.LANCZOS)
         l = (bg.width - 1080) // 2
         t = (bg.height - 1920) // 2
-        bg = bg.crop((l, t, l + 1080, t + 1920)).filter(ImageFilter.GaussianBlur(radius=28))
+        bg = bg.crop((l, t, l + 1080, t + 1920)).filter(ImageFilter.GaussianBlur(radius=30))
         
-        # Center sharp foreground
+        # 2. Sharp foreground
         fg_scale = 1000 / im.width
         fg_sz = (1000, int(im.height * fg_scale))
         fg = im.resize(fg_sz, Image.Resampling.LANCZOS)
@@ -177,7 +158,6 @@ build_portrait_slide("img1_raw.jpg", "slide1.jpg")
 
 image_files = ["slide1.jpg"]
 
-# Extra Slideshow Visuals
 for idx in range(2, 4):
     try:
         extra_url = f"https://picsum.photos/1080/720?random={idx}"
@@ -191,17 +171,26 @@ for idx in range(2, 4):
     except Exception:
         pass
 
-# --- 7. SLIDESHOW + KEN BURNS ZOOM ---
+# --- 7. SLIDESHOW (PILLOW-POWERED SMOOTH ZOOM) ---
 slide_dur = total_duration / len(image_files)
 video_slides = []
 
 for s_path in image_files:
-    clip = (
-        ImageClip(s_path)
-        .set_duration(slide_dur)
-        .resize(lambda t: 1.0 + 0.03 * (t / slide_dur))
-        .crop(x_center=540, y_center=960, width=1080, height=1920)
-    )
+    pil_img = Image.open(s_path).convert("RGB")
+    
+    # Custom frame function avoiding MoviePy resize bugs
+    def make_zoom_frame(t, base_im=pil_img, dur=slide_dur):
+        zoom = 1.0 + 0.04 * (t / dur)
+        w, h = base_im.size
+        new_w, new_h = int(w * zoom), int(h * zoom)
+        resized = base_im.resize((new_w, new_h), Image.Resampling.BILINEAR)
+        left = (new_w - 1080) // 2
+        top = (new_h - 1920) // 2
+        cropped = resized.crop((left, top, left + 1080, top + 1920))
+        return np.array(cropped)
+
+    from moviepy.video.VideoClip import VideoClip
+    clip = VideoClip(make_zoom_frame, duration=slide_dur)
     video_slides.append(clip)
 
 slideshow = concatenate_videoclips(video_slides, method="compose")
@@ -225,7 +214,7 @@ headline = TextClip(
     bg_color='rgba(0,0,0,0.75)'
 ).set_position(('center', 280)).set_duration(total_duration)
 
-# --- 8. DRAMATIC NEWS SFX AUDIO MIX ---
+# --- 8. DRAMATIC NEWS SFX AUDIO ---
 def news_sound_effect(t):
     pulse = 0.07 * math.sin(2 * math.pi * 90 * t)
     tick = 0.05 * math.sin(2 * math.pi * 1200 * t) * (math.exp(-60 * (t % 0.5)))
@@ -234,7 +223,7 @@ def news_sound_effect(t):
 sfx_audio = AudioClip(news_sound_effect, duration=total_duration).volumex(0.35)
 final_audio = CompositeAudioClip([voice_audio.volumex(1.0), sfx_audio])
 
-# Render Video
+# Render Output Video
 video = CompositeVideoClip([slideshow, badge, headline], size=(1080, 1920))
 video = video.set_audio(final_audio)
 video.write_videofile("final_shorts.mp4", fps=24, codec="libx264", audio_codec="aac")
@@ -262,7 +251,7 @@ req = youtube.videos().insert(part="snippet,status", body=body, media_body=media
 res = req.execute()
 print(f"Uploaded Successfully! Video ID: {res.get('id')}")
 
-# --- 10. LOG TO HISTORY ---
+# --- 10. UPDATE LOG ---
 with open(HISTORY_FILE, "a", encoding="utf-8") as f:
     f.write(f"{target_id}|{today_str}\n")
 print(f"Saved {target_id} to {HISTORY_FILE}")
