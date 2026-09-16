@@ -1,20 +1,19 @@
 import os
 import sys
 import time
+import asyncio
 import datetime
-import urllib.parse
 import feedparser
 import requests
+import edge_tts
 import numpy as np
 from PIL import Image, ImageFilter
 from google import genai
-from gtts import gTTS
 from moviepy.editor import (
     AudioFileClip,
     TextClip,
     CompositeVideoClip,
-    CompositeAudioClip,
-    concatenate_videoclips
+    CompositeAudioClip
 )
 from moviepy.video.VideoClip import VideoClip
 from moviepy.audio.AudioClip import AudioClip
@@ -106,10 +105,11 @@ script_text = None
 try:
     client = genai.Client(api_key=GEMINI_API_KEY)
     prompt = f"""
-Write a suspenseful 20-second YouTube Shorts script about this news story.
+Write a suspenseful, fast-paced 15-20 second YouTube Shorts news script.
+Hook the audience immediately in the opening sentence.
 Headline: {title}
 Context: {summary}
-Output spoken text only.
+Output spoken words only. No labels, markdown, or sound notes.
 """
     res = client.models.generate_content(model="gemini-3.6-flash", contents=prompt)
     if res.text:
@@ -122,75 +122,57 @@ if not script_text:
 
 print(f"Script: {script_text}")
 
-# --- 5. TEXT TO SPEECH ---
-tts = gTTS(text=script_text, lang='en', tld='com')
-tts.save("voice.mp3")
+# --- 5. REALISTIC MALE AI VOICE (MICROSOFT EDGE TTS - CHRISTOPHER) ---
+async def generate_voice(text, output_file):
+    communicate = edge_tts.Communicate(text, voice="en-US-ChristopherNeural", rate="+15%")
+    await communicate.save(output_file)
+
+asyncio.run(generate_voice(script_text, "voice.mp3"))
 voice_audio = AudioFileClip("voice.mp3")
 total_duration = voice_audio.duration + 0.8
 
-# --- 6. MULTI-IMAGE ACQUISITION & SAFE 9:16 RENDERING ---
-def build_portrait_slide(img_path, output_name):
-    with Image.open(img_path) as im:
-        im = im.convert("RGB")
-        # 1. Blurred background
-        bg_scale = max(1080 / im.width, 1920 / im.height)
-        bg_sz = (int(im.width * bg_scale), int(im.height * bg_scale))
-        bg = im.resize(bg_sz, Image.Resampling.LANCZOS)
-        l = (bg.width - 1080) // 2
-        t = (bg.height - 1920) // 2
-        bg = bg.crop((l, t, l + 1080, t + 1920)).filter(ImageFilter.GaussianBlur(radius=30))
-        
-        # 2. Sharp foreground
-        fg_scale = 1000 / im.width
-        fg_sz = (1000, int(im.height * fg_scale))
-        fg = im.resize(fg_sz, Image.Resampling.LANCZOS)
-        x = (1080 - 1000) // 2
-        y = (1920 - fg.height) // 2 - 30
-        bg.paste(fg, (x, y))
-        bg.save(output_name, quality=95)
-
-# Primary Story Image
+# --- 6. PREPARE 9:16 OFFICIAL BBC IMAGE (NO RANDOM STOCK IMAGES) ---
 r1 = requests.get(primary_image, timeout=15)
-with open("img1_raw.jpg", "wb") as f:
+with open("raw.jpg", "wb") as f:
     f.write(r1.content)
-build_portrait_slide("img1_raw.jpg", "slide1.jpg")
 
-image_files = ["slide1.jpg"]
+with Image.open("raw.jpg") as im:
+    im = im.convert("RGB")
+    # 1. Blurred 9:16 background
+    bg_scale = max(1080 / im.width, 1920 / im.height)
+    bg_sz = (int(im.width * bg_scale), int(im.height * bg_scale))
+    bg = im.resize(bg_sz, Image.Resampling.LANCZOS)
+    l = (bg.width - 1080) // 2
+    t = (bg.height - 1920) // 2
+    bg = bg.crop((l, t, l + 1080, t + 1920)).filter(ImageFilter.GaussianBlur(radius=30))
 
-for idx in range(2, 4):
-    try:
-        extra_url = f"https://picsum.photos/1080/720?random={idx}"
-        r_extra = requests.get(extra_url, timeout=10)
-        raw_name = f"img{idx}_raw.jpg"
-        slide_name = f"slide{idx}.jpg"
-        with open(raw_name, "wb") as f:
-            f.write(r_extra.content)
-        build_portrait_slide(raw_name, slide_name)
-        image_files.append(slide_name)
-    except Exception:
-        pass
+    # 2. Centered sharp foreground
+    fg_scale = 1000 / im.width
+    fg_sz = (1000, int(im.height * fg_scale))
+    fg = im.resize(fg_sz, Image.Resampling.LANCZOS)
+    x = (1080 - 1000) // 2
+    y = (1920 - fg.height) // 2 - 40
+    bg.paste(fg, (x, y))
+    bg.save("composite_base.jpg", quality=95)
 
-# --- 7. SLIDESHOW (PILLOW SMOOTH ZOOM) ---
-slide_dur = total_duration / len(image_files)
-video_slides = []
+# --- 7. CINEMATIC KEN BURNS MOTION (ZOOM + SUBTLE PAN) ---
+base_pil = Image.open("composite_base.jpg").convert("RGB")
 
-for s_path in image_files:
-    pil_img = Image.open(s_path).convert("RGB")
-    
-    def make_zoom_frame(t, base_im=pil_img, dur=slide_dur):
-        zoom = 1.0 + 0.04 * (t / dur)
-        w, h = base_im.size
-        new_w, new_h = int(w * zoom), int(h * zoom)
-        resized = base_im.resize((new_w, new_h), Image.Resampling.BILINEAR)
-        left = (new_w - 1080) // 2
-        top = (new_h - 1920) // 2
-        cropped = resized.crop((left, top, left + 1080, top + 1920))
-        return np.array(cropped)
+def make_cinematic_frame(t):
+    progress = t / total_duration
+    zoom = 1.0 + 0.06 * progress
+    w, h = base_pil.size
+    new_w, new_h = int(w * zoom), int(h * zoom)
+    resized = base_pil.resize((new_w, new_h), Image.Resampling.BILINEAR)
 
-    clip = VideoClip(make_zoom_frame, duration=slide_dur)
-    video_slides.append(clip)
+    max_pan_x = new_w - 1080
+    pan_x = int((max_pan_x / 2) + (max_pan_x * 0.25) * np.sin(progress * np.pi))
+    top = (new_h - 1920) // 2
 
-slideshow = concatenate_videoclips(video_slides, method="compose")
+    cropped = resized.crop((pan_x, top, pan_x + 1080, top + 1920))
+    return np.array(cropped)
+
+animated_video = VideoClip(make_cinematic_frame, duration=total_duration)
 
 # Overlay Badges & Headline
 badge = TextClip(
@@ -213,18 +195,16 @@ headline = TextClip(
 
 # --- 8. DRAMATIC NEWS SFX AUDIO (VECTORIZED NUMPY) ---
 def news_sound_effect(t):
-    # Vectorized calculation for MoviePy arrays
     pulse = 0.05 * np.sin(2 * np.pi * 90 * t)
     tick = 0.04 * np.sin(2 * np.pi * 1200 * t) * np.exp(-50 * (t % 0.5))
     mono = pulse + tick
-    # Return stereo sound: (samples, 2)
     return np.column_stack((mono, mono))
 
 sfx_audio = AudioClip(news_sound_effect, duration=total_duration)
 final_audio = CompositeAudioClip([voice_audio, sfx_audio])
 
 # Render Output Video
-video = CompositeVideoClip([slideshow, badge, headline], size=(1080, 1920))
+video = CompositeVideoClip([animated_video, badge, headline], size=(1080, 1920))
 video = video.set_audio(final_audio)
 video.write_videofile("final_shorts.mp4", fps=24, codec="libx264", audio_codec="aac")
 
