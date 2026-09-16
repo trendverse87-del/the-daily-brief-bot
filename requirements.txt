@@ -1,7 +1,7 @@
 feedparser
 requests
 google-genai
-gtts
+edge-tts
 Pillow
 moviepy<2.0.0
 google-api-python-client
