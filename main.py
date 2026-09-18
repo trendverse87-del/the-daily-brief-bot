@@ -93,35 +93,55 @@ if not selected_entry:
     print("No fresh news found. Exiting.")
     sys.exit(0)
 
-title = selected_entry.title
+raw_title = selected_entry.title
 summary = selected_entry.get("summary", "")
 target_id = selected_entry.get("id") or selected_entry.get("link")
-print(f"Selected Viral Story: {title}")
+print(f"Selected Viral Story: {raw_title}")
 
-# --- 4. GENERATE SCRIPT VIA GEMINI WITH RETENTION HOOK ---
+# --- 4. GENERATE SCRIPT & VIRAL TITLE VIA GEMINI ---
 script_text = None
+viral_title = None
+
 try:
     client = genai.Client(api_key=GEMINI_API_KEY)
-    prompt = f"""
+    
+    # Generate Hook Script
+    prompt_script = f"""
 Write a suspenseful, fast-paced 15-20 second YouTube Shorts news script.
 Hook viewers intensely in the first sentence.
 End with a fast call-to-action: "Follow for instant daily updates!"
-Headline: {title}
+Headline: {raw_title}
 Context: {summary}
 Output spoken words only. No labels, markdown, emojis, or sound notes.
 """
-    res = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-    if res.text:
-        script_text = res.text.strip().replace("*", "").replace("\n", " ")
+    res_script = client.models.generate_content(model="gemini-2.5-flash", contents=prompt_script)
+    if res_script.text:
+        script_text = res_script.text.strip().replace("*", "").replace("\n", " ")
+
+    # Generate Short Punchy YouTube Title (Under 55 chars)
+    prompt_title = f"""
+Convert this news headline into an ultra-catchy, urgent YouTube Shorts click title under 50 characters. 
+Use 1 fitting emoji.
+Headline: {raw_title}
+Output only the title.
+"""
+    res_title = client.models.generate_content(model="gemini-2.5-flash", contents=prompt_title)
+    if res_title.text:
+        viral_title = res_title.text.strip().replace('"', '').replace('\n', '')
+
 except Exception as e:
     print(f"AI generation bypassed: {e}")
 
 if not script_text:
-    script_text = f"Breaking news update. {title}. {summary}. Follow for instant daily updates!"
+    script_text = f"Breaking news update. {raw_title}. {summary}. Follow for instant daily updates!"
+
+if not viral_title or len(viral_title) > 65:
+    viral_title = f"{raw_title[:48]}..."
 
 print(f"Script: {script_text}")
+print(f"Viral Title: {viral_title}")
 
-# --- 5. REALISTIC MALE AI VOICE (MICROSOFT EDGE TTS - CHRISTOPHER) ---
+# --- 5. REALISTIC MALE AI VOICE (EDGE TTS - CHRISTOPHER) ---
 async def generate_voice(text, output_file):
     communicate = edge_tts.Communicate(text, voice="en-US-ChristopherNeural", rate="+15%")
     await communicate.save(output_file)
@@ -143,7 +163,7 @@ with open("raw.jpg", "wb") as f:
 
 raw_im = Image.open("raw.jpg").convert("RGB")
 
-# 1. Blurred 9:16 background
+# Blurred 9:16 background
 bg_scale = max(1080 / raw_im.width, 1920 / raw_im.height)
 bg_sz = (int(raw_im.width * bg_scale), int(raw_im.height * bg_scale))
 bg_base = raw_im.resize(bg_sz, Image.Resampling.BILINEAR)
@@ -151,7 +171,7 @@ l = (bg_base.width - 1080) // 2
 t = (bg_base.height - 1920) // 2
 bg_base = bg_base.crop((l, t, l + 1080, t + 1920)).filter(ImageFilter.GaussianBlur(radius=35))
 
-# Font loaders with fallbacks
+# Font loaders
 def load_font(size):
     for f in ["DejaVuSans-Bold.ttf", "FreeSansBold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]:
         try:
@@ -177,9 +197,9 @@ def wrap_title(text, max_chars=30):
         lines.append(" ".join(cur))
     return lines
 
-title_lines = wrap_title(title, max_chars=30)[:3]
+title_lines = wrap_title(raw_title, max_chars=30)[:3]
 
-# --- 8. FRAME RENDERING (KEN BURNS + TITLES + DYNAMIC CAPTIONS) ---
+# --- 8. FRAME RENDERING (KEN BURNS + ALERT FLASH + PROGRESS BAR + CAPTIONS) ---
 fg_w = 1000
 fg_h = int(fg_w * (raw_im.height / raw_im.width))
 
@@ -187,7 +207,7 @@ def make_cinematic_frame(t):
     frame = bg_base.copy()
     draw = ImageDraw.Draw(frame)
 
-    # 1. Ken Burns Zoom & Subtle Sway on Sharp Foreground
+    # 1. Ken Burns Foreground Zoom + Sway
     progress = t / total_duration
     zoom = 1.0 + 0.10 * progress
     sway = int(np.sin(progress * np.pi) * 20)
@@ -205,17 +225,25 @@ def make_cinematic_frame(t):
     frame.paste(fg_cropped, (pos_x, pos_y))
     draw.rectangle([pos_x - 3, pos_y - 3, pos_x + fg_w + 3, pos_y + fg_cropped.height + 3], outline=(255, 255, 255), width=3)
 
-    # 2. BREAKING NEWS Badge & Headline Overlay
-    draw.rectangle([pos_x, 210, pos_x + 430, 275], fill=(220, 20, 60))
-    draw.text((pos_x + 20, 222), "🔴 BREAKING NEWS", font=font_badge, fill=(255, 255, 255))
+    # 2. First 1.2s Red Alert Flash (Hook Attention)
+    if t < 1.2 and int(t * 8) % 2 == 0:
+        badge_bg = (255, 255, 255)
+        badge_fg = (220, 20, 60)
+    else:
+        badge_bg = (220, 20, 60)
+        badge_fg = (255, 255, 255)
 
+    draw.rectangle([pos_x, 210, pos_x + 430, 275], fill=badge_bg)
+    draw.text((pos_x + 20, 222), "🔴 BREAKING NEWS", font=font_badge, fill=badge_fg)
+
+    # Headline overlay
     line_y = 295
     for line in title_lines:
-        draw.text((pos_x + 3, line_y + 3), line, font=font_title, fill=(0, 0, 0)) # Shadow
+        draw.text((pos_x + 3, line_y + 3), line, font=font_title, fill=(0, 0, 0))
         draw.text((pos_x, line_y), line, font=font_title, fill=(255, 255, 255))
         line_y += 55
 
-    # 3. Dynamic Animated Subtitles (Yellow text inside dark pill box)
+    # 3. Dynamic Animated Subtitles (Yellow text with padded pill box)
     chunk_idx = min(int(t / chunk_duration), len(chunks) - 1)
     current_caption = chunks[chunk_idx].upper()
 
@@ -226,6 +254,11 @@ def make_cinematic_frame(t):
 
     draw.rounded_rectangle([cap_x1, cap_box_y, cap_x2, cap_box_y + 85], radius=16, fill=(0, 0, 0), outline=(255, 215, 0), width=3)
     draw.text((540, cap_box_y + 42), current_caption, font=font_caption, fill=(255, 230, 0), anchor="mm")
+
+    # 4. Bottom Retention Progress Bar
+    bar_width = int(1080 * progress)
+    draw.rectangle([0, 1912, 1080, 1920], fill=(40, 40, 40))
+    draw.rectangle([0, 1912, bar_width, 1920], fill=(255, 0, 50))
 
     return np.array(frame)
 
@@ -243,7 +276,7 @@ final_audio = CompositeAudioClip([voice_audio, sfx_audio]).set_duration(total_du
 animated_video = animated_video.set_audio(final_audio)
 
 # --- 10. CRISP 8000k BITRATE RENDERING ---
-print("Rendering crisp video with dynamic subtitles...")
+print("Rendering crisp video with hooks and progress bar...")
 animated_video.write_videofile(
     "final_shorts.mp4",
     fps=30,
@@ -260,7 +293,7 @@ print("Uploading to YouTube...")
 creds = Credentials.from_authorized_user_file("token.json", ["https://www.googleapis.com/auth/youtube.upload"])
 youtube = build("youtube", "v3", credentials=creds)
 
-upload_title = f"{title[:75]} | Breaking News #Shorts"
+upload_title = f"{viral_title} | Breaking News #Shorts"
 body = {
     "snippet": {
         "title": upload_title,
