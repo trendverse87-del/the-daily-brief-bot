@@ -220,7 +220,7 @@ def make_cinematic_frame(t):
     current_caption = chunks[chunk_idx].upper()
 
     cap_box_y = pos_y + fg_cropped.height + 90
-    cap_w = len(current_caption) * 26 + 50
+    cap_w = len(current_caption) * 28 + 80
     cap_x1 = max(60, 540 - (cap_w // 2))
     cap_x2 = min(1020, 540 + (cap_w // 2))
 
