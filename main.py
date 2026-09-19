@@ -3,6 +3,7 @@ import sys
 import time
 import asyncio
 import datetime
+import re
 import feedparser
 import requests
 import edge_tts
@@ -150,11 +151,39 @@ asyncio.run(generate_voice(script_text, "voice.mp3"))
 voice_audio = AudioFileClip("voice.mp3")
 total_duration = voice_audio.duration + 0.8
 
-# --- 6. SUBTITLE CHUNKING LOGIC ---
-words = script_text.split()
-chunk_size = 3
-chunks = [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
-chunk_duration = total_duration / max(len(chunks), 1)
+# --- 6. SMART SUBTITLE CHUNKING LOGIC (SENTENCE & LENGTH AWARE) ---
+def generate_smart_chunks(text, max_words=3, max_chars=18):
+    raw_words = text.split()
+    chunks = []
+    current_chunk = []
+    
+    for w in raw_words:
+        clean_w = re.sub(r'[^\w\s]', '', w).upper()
+        if not clean_w:
+            continue
+            
+        test_chunk = current_chunk + [clean_w]
+        has_break = any(char in w for char in ['.', '?', '!'])
+        
+        # Word count or character limit check
+        if len(test_chunk) > max_words or sum(len(x) for x in test_chunk) + len(test_chunk) - 1 > max_chars:
+            if current_chunk:
+                chunks.append(" ".join(current_chunk))
+            current_chunk = [clean_w]
+        else:
+            current_chunk.append(clean_w)
+            
+        if has_break:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = []
+            
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+        
+    return chunks
+
+chunks = generate_smart_chunks(script_text, max_words=3, max_chars=18)
+chunk_duration = voice_audio.duration / max(len(chunks), 1)
 
 # --- 7. IMAGE PREPARATION & FONTS ---
 r1 = requests.get(primary_image, timeout=15)
@@ -182,7 +211,7 @@ def load_font(size):
 
 font_badge = load_font(34)
 font_title = load_font(44)
-font_caption = load_font(48)
+font_caption_base = load_font(48)
 
 # Title line wrap
 def wrap_title(text, max_chars=30):
@@ -199,7 +228,7 @@ def wrap_title(text, max_chars=30):
 
 title_lines = wrap_title(raw_title, max_chars=30)[:3]
 
-# --- 8. FRAME RENDERING (KEN BURNS + ALERT FLASH + PROGRESS BAR + CAPTIONS) ---
+# --- 8. FRAME RENDERING (KEN BURNS + ALERT FLASH + PROGRESS BAR + AUTO-FIT CAPTIONS) ---
 fg_w = 1000
 fg_h = int(fg_w * (raw_im.height / raw_im.width))
 
@@ -243,17 +272,31 @@ def make_cinematic_frame(t):
         draw.text((pos_x, line_y), line, font=font_title, fill=(255, 255, 255))
         line_y += 55
 
-    # 3. Dynamic Animated Subtitles (Yellow text with padded pill box)
+    # 3. Dynamic Auto-Fitting Animated Subtitles (No Overflow)
     chunk_idx = min(int(t / chunk_duration), len(chunks) - 1)
-    current_caption = chunks[chunk_idx].upper()
+    current_caption = chunks[chunk_idx]
 
-    cap_box_y = pos_y + fg_cropped.height + 90
-    cap_w = len(current_caption) * 28 + 80
-    cap_x1 = max(60, 540 - (cap_w // 2))
-    cap_x2 = min(1020, 540 + (cap_w // 2))
+    # Auto-scale font according to caption length
+    if len(current_caption) > 16:
+        chosen_font = load_font(38)
+    elif len(current_caption) > 12:
+        chosen_font = load_font(42)
+    else:
+        chosen_font = font_caption_base
 
-    draw.rounded_rectangle([cap_x1, cap_box_y, cap_x2, cap_box_y + 85], radius=16, fill=(0, 0, 0), outline=(255, 215, 0), width=3)
-    draw.text((540, cap_box_y + 42), current_caption, font=font_caption, fill=(255, 230, 0), anchor="mm")
+    bbox = draw.textbbox((0, 0), current_caption, font=chosen_font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+
+    box_w = min(1000, max(text_w + 60, 240))
+    box_h = max(text_h + 36, 80)
+
+    cap_x1 = 540 - (box_w // 2)
+    cap_x2 = 540 + (box_w // 2)
+    cap_box_y = pos_y + fg_cropped.height + 80
+
+    draw.rounded_rectangle([cap_x1, cap_box_y, cap_x2, cap_box_y + box_h], radius=16, fill=(0, 0, 0), outline=(255, 215, 0), width=3)
+    draw.text((540, cap_box_y + (box_h // 2)), current_caption, font=chosen_font, fill=(255, 230, 0), anchor="mm")
 
     # 4. Bottom Retention Progress Bar
     bar_width = int(1080 * progress)
