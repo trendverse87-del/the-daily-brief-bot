@@ -227,7 +227,7 @@ def wrap_title(text, max_chars=30):
 
 title_lines = wrap_title(raw_title, max_chars=30)[:3]
 
-# --- 8. FRAME RENDERING (CLAMPED SWAY + FAST CACHED CAPTIONS) ---
+# --- 8. FRAME RENDERING (CLAMPED SWAY + SAFE CLAMPED CAPTIONS) ---
 fg_w = 1000
 fg_h = int(fg_w * (raw_im.height / raw_im.width))
 
@@ -271,7 +271,7 @@ def make_cinematic_frame(t):
         draw.text((pos_x, line_y), line, font=font_title, fill=(255, 255, 255))
         line_y += 55
 
-    # 3. Dynamic Auto-Fitting Animated Subtitles (Pre-cached zero-leak font)
+    # 3. Dynamic Auto-Fitting Animated Subtitles (Pre-cached & Safe Clamped)
     chunk_idx = min(int(t / chunk_duration), len(chunks) - 1)
     current_caption = chunks[chunk_idx]
 
@@ -282,16 +282,23 @@ def make_cinematic_frame(t):
     else:
         chosen_font = font_caption_lg
 
-    bbox = draw.textbbox((0, 0), current_caption, font=chosen_font)
-    text_w = bbox[2] - bbox[0]
-    text_h = bbox[3] - bbox[1]
+    # Text size calculation with fallback guard
+    try:
+        bbox = draw.textbbox((0, 0), current_caption, font=chosen_font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+    except Exception:
+        text_w = len(current_caption) * 24
+        text_h = 45
 
     box_w = min(1000, max(text_w + 60, 240))
     box_h = max(text_h + 36, 80)
 
     cap_x1 = 540 - (box_w // 2)
     cap_x2 = 540 + (box_w // 2)
-    cap_box_y = pos_y + fg_cropped.height + 80
+    
+    # Ensures box never cuts off into the progress bar at the bottom
+    cap_box_y = min(1680, pos_y + fg_cropped.height + 80)
 
     draw.rounded_rectangle([cap_x1, cap_box_y, cap_x2, cap_box_y + box_h], radius=16, fill=(0, 0, 0), outline=(255, 215, 0), width=3)
     draw.text((540, cap_box_y + (box_h // 2)), current_caption, font=chosen_font, fill=(255, 230, 0), anchor="mm")
