@@ -106,7 +106,6 @@ viral_title = None
 try:
     client = genai.Client(api_key=GEMINI_API_KEY)
     
-    # Generate Hook Script
     prompt_script = f"""
 Write a suspenseful, fast-paced 15-20 second YouTube Shorts news script.
 Hook viewers intensely in the first sentence.
@@ -119,7 +118,6 @@ Output spoken words only. No labels, markdown, emojis, or sound notes.
     if res_script.text:
         script_text = res_script.text.strip().replace("*", "").replace("\n", " ")
 
-    # Generate Short Punchy YouTube Title (Under 55 chars)
     prompt_title = f"""
 Convert this news headline into an ultra-catchy, urgent YouTube Shorts click title under 50 characters. 
 Use 1 fitting emoji.
@@ -165,7 +163,6 @@ def generate_smart_chunks(text, max_words=3, max_chars=18):
         test_chunk = current_chunk + [clean_w]
         has_break = any(char in w for char in ['.', '?', '!'])
         
-        # Word count or character limit check
         if len(test_chunk) > max_words or sum(len(x) for x in test_chunk) + len(test_chunk) - 1 > max_chars:
             if current_chunk:
                 chunks.append(" ".join(current_chunk))
@@ -185,7 +182,7 @@ def generate_smart_chunks(text, max_words=3, max_chars=18):
 chunks = generate_smart_chunks(script_text, max_words=3, max_chars=18)
 chunk_duration = voice_audio.duration / max(len(chunks), 1)
 
-# --- 7. IMAGE PREPARATION & FONTS ---
+# --- 7. IMAGE PREPARATION & FONTS (PRE-CACHED) ---
 r1 = requests.get(primary_image, timeout=15)
 with open("raw.jpg", "wb") as f:
     f.write(r1.content)
@@ -200,7 +197,7 @@ l = (bg_base.width - 1080) // 2
 t = (bg_base.height - 1920) // 2
 bg_base = bg_base.crop((l, t, l + 1080, t + 1920)).filter(ImageFilter.GaussianBlur(radius=35))
 
-# Font loaders
+# Pre-cache all font sizes once (Prevents frame-by-frame disk I/O leaks)
 def load_font(size):
     for f in ["DejaVuSans-Bold.ttf", "FreeSansBold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]:
         try:
@@ -211,7 +208,9 @@ def load_font(size):
 
 font_badge = load_font(34)
 font_title = load_font(44)
-font_caption_base = load_font(48)
+font_caption_lg = load_font(48)
+font_caption_md = load_font(42)
+font_caption_sm = load_font(38)
 
 # Title line wrap
 def wrap_title(text, max_chars=30):
@@ -228,7 +227,7 @@ def wrap_title(text, max_chars=30):
 
 title_lines = wrap_title(raw_title, max_chars=30)[:3]
 
-# --- 8. FRAME RENDERING (KEN BURNS + ALERT FLASH + PROGRESS BAR + AUTO-FIT CAPTIONS) ---
+# --- 8. FRAME RENDERING (CLAMPED SWAY + FAST CACHED CAPTIONS) ---
 fg_w = 1000
 fg_h = int(fg_w * (raw_im.height / raw_im.width))
 
@@ -236,7 +235,7 @@ def make_cinematic_frame(t):
     frame = bg_base.copy()
     draw = ImageDraw.Draw(frame)
 
-    # 1. Ken Burns Foreground Zoom + Sway
+    # 1. Ken Burns Foreground Zoom + Sway (Fully clamped boundaries)
     progress = t / total_duration
     zoom = 1.0 + 0.10 * progress
     sway = int(np.sin(progress * np.pi) * 20)
@@ -245,8 +244,8 @@ def make_cinematic_frame(t):
     scaled_h = int(fg_h * zoom)
     scaled_img = raw_im.resize((scaled_w, scaled_h), Image.Resampling.BILINEAR)
 
-    crop_x = max(0, (scaled_w - fg_w) // 2 + sway)
-    crop_y = max(0, (scaled_h - fg_h) // 2)
+    crop_x = max(0, min(scaled_w - fg_w, (scaled_w - fg_w) // 2 + sway))
+    crop_y = max(0, min(scaled_h - fg_h, (scaled_h - fg_h) // 2))
     fg_cropped = scaled_img.crop((crop_x, crop_y, crop_x + fg_w, crop_y + min(fg_h, scaled_h - crop_y)))
 
     pos_x = (1080 - fg_w) // 2
@@ -272,17 +271,16 @@ def make_cinematic_frame(t):
         draw.text((pos_x, line_y), line, font=font_title, fill=(255, 255, 255))
         line_y += 55
 
-    # 3. Dynamic Auto-Fitting Animated Subtitles (No Overflow)
+    # 3. Dynamic Auto-Fitting Animated Subtitles (Pre-cached zero-leak font)
     chunk_idx = min(int(t / chunk_duration), len(chunks) - 1)
     current_caption = chunks[chunk_idx]
 
-    # Auto-scale font according to caption length
     if len(current_caption) > 16:
-        chosen_font = load_font(38)
+        chosen_font = font_caption_sm
     elif len(current_caption) > 12:
-        chosen_font = load_font(42)
+        chosen_font = font_caption_md
     else:
-        chosen_font = font_caption_base
+        chosen_font = font_caption_lg
 
     bbox = draw.textbbox((0, 0), current_caption, font=chosen_font)
     text_w = bbox[2] - bbox[0]
@@ -318,15 +316,15 @@ sfx_audio = AudioClip(news_sound_effect, duration=total_duration)
 final_audio = CompositeAudioClip([voice_audio, sfx_audio]).set_duration(total_duration)
 animated_video = animated_video.set_audio(final_audio)
 
-# --- 10. CRISP 8000k BITRATE RENDERING ---
-print("Rendering crisp video with hooks and progress bar...")
+# --- 10. OPTIMIZED FAST RENDERING FOR GITHUB ACTIONS ---
+print("Rendering video with ultra-fast optimized pipeline...")
 animated_video.write_videofile(
     "final_shorts.mp4",
     fps=30,
     codec="libx264",
     audio_codec="aac",
-    bitrate="8000k",
-    preset="fast",
+    bitrate="5000k",
+    preset="ultrafast",
     threads=4,
     logger=None
 )
