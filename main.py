@@ -29,8 +29,8 @@ RSS_FEEDS = [
 ]
 
 HISTORY_FILE = "last_news.txt"
-DAILY_LIMIT = 8
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6KeN6UXhMEwUVaPinOKpjtLNUDgEf0qNFBRBm992InRqA"
+DAILY_LIMIT = 10
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
 
 # --- 2. CHECK HISTORY & DAILY LIMIT ---
 seen_links = set()
