@@ -142,7 +142,7 @@ print(f"Viral Title: {viral_title}")
 
 # --- 5. REALISTIC MALE AI VOICE (EDGE TTS - FASTER & LIVELIER) ---
 async def generate_voice(text, output_file):
-    communicate = edge_tts.Communicate(text, voice="en-US-ChristopherNeural", rate="+20%")
+    communicate = edge_tts.Communicate(text, voice="en-US-AndrewNeural", rate="+15%")
     await communicate.save(output_file)
 
 asyncio.run(generate_voice(script_text, "voice.mp3"))
